@@ -1,0 +1,9 @@
+[package]
+name = "pi_slot_wheel"
+version = "0.1.0"
+authors = ["zmythleo <zmythleo@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+slotmap = "1.0"
+pi_slot_deque = {path="../pi_slot_deque"}
