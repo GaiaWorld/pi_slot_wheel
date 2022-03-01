@@ -2,8 +2,12 @@
 name = "pi_slot_wheel"
 version = "0.1.0"
 authors = ["zmythleo <zmythleo@gmail.com>"]
-edition = "2018"
+edition = "2021"
+description = "Multilayer timing wheel with constant generics"
+repository = "https://github.com/GaiaWorld/pi_slot_wheel.git"
+license = "MIT OR Apache-2.0"
+keywords = ["pi", "pi_slot_wheel"]
 
 [dependencies]
 slotmap = "1.0"
-pi_slot_deque = {path="../pi_slot_deque"}
+pi_slot_deque = "0.1"
