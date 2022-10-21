@@ -129,6 +129,12 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
     pub fn pop(&mut self, slot: &mut Slot<TimerKey, TimeoutItem<T>>) -> Option<TimeoutItem<T>> {
         self.layer0[self.index].pop_front(slot)
     }
+    /// 弹出最小精度的一个定时任务
+    /// * @tip 弹出 None 时，外部可以检查时间决定是否roll
+    /// * @return `Option<(TimerKey, Item<T>)>` 弹出的定时元素
+    pub fn pop_kv(&mut self, slot: &mut Slot<TimerKey, TimeoutItem<T>>) -> Option<(TimerKey, TimeoutItem<T>)> {
+        self.layer0[self.index].pop_kv_front(slot)
+    }
     /// 轮滚动 - 向后滚动一个最小粒度, 可能会造成轮的逐层滚动。返回是否滚动到底了
     pub fn roll(&mut self, slot: &mut Slot<TimerKey, TimeoutItem<T>>) -> bool {
         // 如果首层的轮没有滚到底，则简单+1返回
