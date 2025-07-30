@@ -1,6 +1,6 @@
 [package]
 name = "pi_slot_wheel"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["zmythleo <zmythleo@gmail.com>"]
 edition = "2021"
 description = "Multilayer timing wheel with constant generics"
@@ -9,5 +9,6 @@ license = "MIT OR Apache-2.0"
 keywords = ["pi", "pi_slot_wheel"]
 
 [dependencies]
-slotmap = "1.0"
-pi_slot_deque = "0.2"
+pi_null = "0.1"
+slotmap = { version = "0.2", package = "pi_slotmap" }
+pi_slot_deque = "0.3"

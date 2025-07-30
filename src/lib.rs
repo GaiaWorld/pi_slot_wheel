@@ -3,6 +3,7 @@
 
 use pi_slot_deque::{Deque, Slot};
 use slotmap::{Key, new_key_type};
+use pi_null::Null;
 use std::marker::PhantomData;
 use std::{cmp::Ordering, fmt};
 
