@@ -1,6 +1,6 @@
 [package]
 name = "pi_slot_wheel"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["zmythleo <zmythleo@gmail.com>"]
 edition = "2021"
 description = "Multilayer timing wheel with constant generics"
