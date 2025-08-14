@@ -201,18 +201,20 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
     }
 
     /// 判断指定时间是否存在任务
-    pub fn is_null(&self, timeout: usize) -> Option<bool> {
+    pub fn is_null(&self, mut timeout: usize) -> Option<bool> {
         if timeout < N0 {
             let j = (self.index + timeout) % N0;
             return Some(self.layer0[j].head().is_null() && self.layer0[j].tail().is_null());
         }
-        let t = timeout - N0;
-        let layer = t / N;
-        let remain = t % N;
-        if layer < L {
-            let offset = self.indexs[layer] + remain;
-            let item = self.layers[layer][offset];
-            return Some(item.head().is_null() && item.tail().is_null());
+        let mut fix = self.index;
+        for i in 0..L {
+            let t = N0 * N.pow(i as u32);
+            if timeout < t * N {
+                timeout = (timeout + fix + self.indexs[i] * t) % (t * N);
+                let j = timeout / t;
+                return Some(self.layers[i][j].head().is_null() && self.layers[i][j].tail().is_null());
+            }
+            fix += self.indexs[i] * t;
         }
         None
     }
