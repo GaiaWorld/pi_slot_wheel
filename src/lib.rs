@@ -20,8 +20,6 @@ pub enum Result<T> {
     /// 未插入，返回修正后的时间和原任务；修正时间溢出时饱和为 usize::MAX。
     Overflow(usize, T),
 }
-/// 标记由外部结构管理的任务，不属于定时轮中的任何槽位。
-pub const EXTERNAL_INDEX: usize = usize::MAX;
 /// 多层定时轮。三个维度都必须大于零，且 N0 * N^L 不得超过 usize。
 /// 创建时校验维度，不满足时 panic；所有操作必须使用同一份 Slot。
 pub struct Wheel<T, const N0: usize, const N: usize, const L: usize> {
@@ -69,6 +67,12 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
         for _ in 0..L {
             capacity = capacity.checked_mul(N).expect("wheel capacity overflow");
         }
+        N0.checked_add(N.checked_mul(L).expect("wheel index overflow"))
+            .expect("wheel index overflow");
+    }
+    /// 返回轮内所有槽位之后的第一个索引，供外部队列的任务标记使用。
+    pub const fn external_index() -> usize {
+        N0 + N * L
     }
     /// 返回轮指针在当前完整周期内的位置；周期结束后从零开始。
     pub fn roll_count(&self) -> usize {
@@ -113,6 +117,47 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
             fix += self.indexs[i] * t;
         }
         Result::Overflow(timeout.saturating_add(fix), el)
+    }
+    /// 将外部队列的任务移入轮内，保留原键。timeout 是相对当前刻度的延迟。
+    /// 超过轮容量或键不存在、并非外部任务时返回 false，任务不移动。
+    /// 有效键必须属于传入的外部队列；队列与轮必须使用同一份 Slot。
+    pub fn move_from_external(
+        &mut self,
+        timeout: usize,
+        key: TimerKey,
+        external: &mut Deque<TimerKey, TimeoutItem<T>>,
+        slot: &mut Slot<TimerKey, TimeoutItem<T>>,
+    ) -> bool {
+        if timeout >= self.max_time()
+            || slot
+                .get(key)
+                .is_none_or(|item| item.index != Self::external_index())
+        {
+            return false;
+        }
+        if timeout < N0 {
+            let j = (self.index + timeout) % N0;
+            let item = slot.get_mut(key).expect("external key missing");
+            item.timeout = timeout;
+            item.index = j;
+            external.ops(slot).move_back_to(&mut self.layer0[j]);
+            return true;
+        }
+        let mut fix = self.index;
+        for i in 0..L {
+            let t = N0 * N.pow(i as u32);
+            if timeout < t * N {
+                let corrected = (timeout + fix + self.indexs[i] * t) % (t * N);
+                let j = corrected / t;
+                let item = slot.get_mut(key).expect("external key missing");
+                item.timeout = corrected;
+                item.index = N0 + i * N + j;
+                external.ops(slot).move_back_to(&mut self.layers[i][j]);
+                return true;
+            }
+            fix += self.indexs[i] * t;
+        }
+        false
     }
     /// 返回一个完整轮周期的刻度数；具体能否插入以 push 的结果为准。
     pub fn max_time(&self) -> usize {
@@ -201,14 +246,14 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
     /// 按稳定键移除任务；无效键或外部管理的任务返回 None。
     /// 跨层迁移时键不变，当前槽位从 Slot 中任务的 index 获取。
     /// 必须传入本轮一直使用的 Slot；轮内任务的 index 只允许由轮更新。
-    /// 外部任务使用 EXTERNAL_INDEX，由外部结构负责移除。
+    /// 外部任务使用 Wheel::external_index()，由外部结构负责移除。
     pub fn remove(
         &mut self,
         key: TimerKey,
         slot: &mut Slot<TimerKey, TimeoutItem<T>>,
     ) -> Option<TimeoutItem<T>> {
         let index = slot.get(key)?.index;
-        if index == EXTERNAL_INDEX {
+        if index >= Self::external_index() {
             return None;
         }
         if index < N0 {
@@ -262,7 +307,7 @@ pub struct TimeoutItem<T> {
     pub timeout: usize,
     /// 用户任务数据。
     pub el: T,
-    /// 所在槽位的扁平索引；外部管理的任务可使用 EXTERNAL_INDEX。
+    /// 所在槽位的扁平索引；外部管理的任务使用 Wheel::external_index()。
     /// 轮内部据此定位任务，外部不应修改轮内任务的索引。
     pub index: usize,
 }
@@ -485,15 +530,58 @@ fn remove_handles_first_layer_and_external_marker() {
     assert_eq!(wheel.remove(key, &mut slot).map(|item| item.el), Some(7));
     assert!(wheel.is_cur_over());
     let mut external = Deque::new();
-    let external_key = external
-        .ops(&mut slot)
-        .push_back(TimeoutItem::new(100, 9, EXTERNAL_INDEX));
+    let external_key = external.ops(&mut slot).push_back(TimeoutItem::new(
+        100,
+        9,
+        Wheel::<usize, 3, 2, 2>::external_index(),
+    ));
     assert!(wheel.remove(external_key, &mut slot).is_none());
     assert_eq!(slot[external_key].el, 9);
     assert_eq!(
         external.ops(&mut slot).pop_front().map(|item| item.el),
         Some(9)
     );
+}
+
+#[test]
+fn external_task_enters_wheel_without_changing_key() {
+    let mut slot: Slot<TimerKey, TimeoutItem<usize>> = Default::default();
+    let mut wheel: Wheel<usize, 3, 2, 2> = Wheel::default();
+    let mut external = Deque::new();
+    let key = external.ops(&mut slot).push_back(TimeoutItem::new(
+        999,
+        17,
+        Wheel::<usize, 3, 2, 2>::external_index(),
+    ));
+    assert!(!wheel.move_from_external(12, key, &mut external, &mut slot));
+    assert_eq!(external.len(), 1);
+    wheel.roll(&mut slot);
+    assert!(wheel.move_from_external(8, key, &mut external, &mut slot));
+    assert_eq!(external.len(), 0);
+    assert_eq!(slot[key].el, 17);
+    assert_eq!(wheel.remove(key, &mut slot).map(|item| item.el), Some(17));
+    assert_eq!(slot.len(), 0);
+}
+
+#[test]
+fn external_task_entering_first_layer_uses_new_timeout() {
+    let mut slot: Slot<TimerKey, TimeoutItem<usize>> = Default::default();
+    let mut wheel: Wheel<usize, 3, 2, 2> = Wheel::default();
+    let mut external = Deque::new();
+    let key = external.ops(&mut slot).push_back(TimeoutItem::new(
+        999,
+        42,
+        Wheel::<usize, 3, 2, 2>::external_index(),
+    ));
+    assert!(wheel.move_from_external(2, key, &mut external, &mut slot));
+    assert_eq!(slot[key].timeout, 2);
+    wheel.roll(&mut slot);
+    wheel.roll(&mut slot);
+    assert_eq!(
+        wheel.pop_kv(&mut slot).map(|(k, item)| (k, item.el)),
+        Some((key, 42))
+    );
+    assert_eq!(slot.len(), 0);
 }
 
 #[test]
