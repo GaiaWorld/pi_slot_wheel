@@ -1,6 +1,7 @@
 //! 基于常量泛型的多层定时轮。
 //! N0、N、L 分别是首层槽数、其余各层槽数和其余层数。
 //! 所有队列共享调用方传入的同一份 Slot；任务跨层迁移时键保持有效。
+//! 轮外队列也使用该存储；调用方通过 `Wheel::move_from_external` 按键迁入任务。
 
 use pi_key::new_key_type;
 use pi_null::Null;
@@ -118,7 +119,8 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
         }
         Result::Overflow(timeout.saturating_add(fix), el)
     }
-    /// 将外部队列的任务移入轮内，保留原键。timeout 是相对当前刻度的延迟。
+    /// 按指定键将外部队列的任务追加到目标轮槽队尾，保留原键及其余外部任务的顺序。
+    /// timeout 是相对当前刻度的延迟；成功后更新任务的内部时间偏移和槽位索引。
     /// 超过轮容量或键不存在、并非外部任务时返回 false，任务不移动。
     /// 有效键必须属于传入的外部队列；队列与轮必须使用同一份 Slot。
     pub fn move_from_external(
@@ -140,7 +142,9 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
             let item = slot.get_mut(key).expect("external key missing");
             item.timeout = timeout;
             item.index = j;
-            external.ops(slot).move_back_to(&mut self.layer0[j]);
+            external
+                .ops(slot)
+                .move_before_to(key, &mut self.layer0[j], TimerKey::null());
             return true;
         }
         let mut fix = self.index;
@@ -152,7 +156,9 @@ impl<T, const N0: usize, const N: usize, const L: usize> Wheel<T, N0, N, L> {
                 let item = slot.get_mut(key).expect("external key missing");
                 item.timeout = corrected;
                 item.index = N0 + i * N + j;
-                external.ops(slot).move_back_to(&mut self.layers[i][j]);
+                external
+                    .ops(slot)
+                    .move_before_to(key, &mut self.layers[i][j], TimerKey::null());
                 return true;
             }
             fix += self.indexs[i] * t;
@@ -582,6 +588,77 @@ fn external_task_entering_first_layer_uses_new_timeout() {
         Some((key, 42))
     );
     assert_eq!(slot.len(), 0);
+}
+
+#[cfg(test)]
+fn assert_external_migration_moves_requested_key(timeout: usize) {
+    for selected in [0, 1] {
+        let mut slot: Slot<TimerKey, TimeoutItem<usize>> = Default::default();
+        let mut wheel: Wheel<usize, 3, 2, 2> = Wheel::default();
+        let mut external = Deque::new();
+        wheel.roll(&mut slot);
+        let resident = match wheel.push(timeout, 99, &mut slot) {
+            Result::Ok(key) => key,
+            Result::Overflow(_, _) => panic!("unexpected overflow"),
+        };
+        let keys = [10, 20, 30].map(|value| {
+            external.ops(&mut slot).push_back(TimeoutItem::new(
+                999,
+                value,
+                Wheel::<usize, 3, 2, 2>::external_index(),
+            ))
+        });
+        let key = keys[selected];
+        assert!(wheel.move_from_external(timeout, key, &mut external, &mut slot));
+        assert_eq!(external.len(), 2);
+        assert_eq!(slot.len(), 4);
+        for (index, remaining) in keys.into_iter().enumerate() {
+            if index == selected {
+                continue;
+            }
+            assert_eq!(slot[remaining].timeout, 999);
+            assert_eq!(
+                slot[remaining].index,
+                Wheel::<usize, 3, 2, 2>::external_index()
+            );
+            assert_eq!(
+                external
+                    .ops(&mut slot)
+                    .pop_kv_front()
+                    .map(|(k, item)| (k, item.el)),
+                Some((remaining, (index + 1) * 10))
+            );
+        }
+        assert_eq!(external.len(), 0);
+        for _ in 0..timeout {
+            assert!(wheel.pop(&mut slot).is_none());
+            wheel.roll(&mut slot);
+        }
+        assert_eq!(
+            wheel.pop_kv(&mut slot).map(|(k, item)| (k, item.el)),
+            Some((resident, 99))
+        );
+        assert_eq!(
+            wheel.pop_kv(&mut slot).map(|(k, item)| (k, item.el)),
+            Some((key, (selected + 1) * 10))
+        );
+        assert!(wheel.pop(&mut slot).is_none());
+        assert_eq!(slot.len(), 0);
+    }
+}
+
+#[test]
+fn external_migration_selects_non_tail_key_in_first_layer() {
+    for timeout in [0, 2] {
+        assert_external_migration_moves_requested_key(timeout);
+    }
+}
+
+#[test]
+fn external_migration_selects_non_tail_key_in_higher_layers() {
+    for timeout in [4, 8] {
+        assert_external_migration_moves_requested_key(timeout);
+    }
 }
 
 #[test]

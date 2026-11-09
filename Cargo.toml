@@ -1,6 +1,6 @@
 [package]
 name = "pi_slot_wheel"
-version = "0.5.1"
+version = "0.6.0"
 authors = ["zmythleo <zmythleo@gmail.com>"]
 edition = "2021"
 description = "Multilayer timing wheel with constant generics"
@@ -10,5 +10,5 @@ keywords = ["pi", "pi_slot_wheel"]
 
 [dependencies]
 pi_null = "0.2"
-pi_key = "0.3"
-pi_slot_deque = "0.4"
+pi_key = "0.4"
+pi_slot_deque = "0.5"
